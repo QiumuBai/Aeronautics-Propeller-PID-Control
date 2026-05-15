@@ -8,8 +8,8 @@ local inputting = false
 local systemActive = true -- Master toggle
 
 -- PID Tuning (Baseline 'u' is 0 for reactionary balancing)
-local pidPitch = pid.createPid(0.15, 0.01, 1.2, 0.1, 0)
-local pidRoll  = pid.createPid(0.15, 0.01, 1.2, 0.1, 0)
+local pidPitch = pid.createPid(0.35, 0.008, 1.5, 0.1, 0)
+local pidRoll  = pid.createPid(0.35, 0.008, 1.5, 0.1, 0)
 
 -- Sensor Placement Check
 local sensor = peripheral.find("gimbal_sensor")
