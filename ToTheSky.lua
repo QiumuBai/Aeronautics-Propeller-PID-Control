@@ -10,18 +10,16 @@ function Pid.createPid(kp, ki, kd, tick, u)
     }
 
     function pid:step(err)
-        -- Shift error history
         self.e2 = self.e1
         self.e1 = self.e0
         self.e0 = err
 
-        -- Incremental PID Algorithm
-        -- du = P_term + I_term + D_term
         local du = kp * (self.e0 - self.e1) +
                    ki * tick * self.e0 +
                    kd * (self.e0 - 2 * self.e1 + self.e2) / tick
 
         self.u = self.u + du
+        self.u = math.max(-14, math.min(14, self.u))
         return self.u
     end
 

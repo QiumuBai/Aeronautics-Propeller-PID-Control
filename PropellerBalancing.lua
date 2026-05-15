@@ -3,7 +3,6 @@ local pid = tothesky.pid
 
 -- 1. CONFIGURATION
 local targetPitch, targetRoll = 0.0, 0.0
-local sensor = peripheral.wrap('top')
 local running = true
 local inputting = false
 local systemActive = true -- Master toggle
@@ -102,9 +101,9 @@ local function controlLoop()
                 local dP = pidPitch:step(targetPitch - cP)
                 local dR = pidRoll:step(targetRoll - cR)
 
-                local function clamp(val)
-                    return math.max(0, math.min(14, math.floor(val)))
-                end
+               local function clamp(val)
+                   return math.max(0, math.min(14, math.floor(val + 0.5)))
+               end
 
                 s.fl = clamp(dP + dR)
                 s.fr = clamp(dP - dR)
@@ -112,8 +111,14 @@ local function controlLoop()
                 s.br = clamp(-dP - dR)
 
                 -- IDLE STOP LOGIC: If all props calculate 0, send the Stop signal
+                local zeroCount = 0
                 if s.fl == 0 and s.fr == 0 and s.bl == 0 and s.br == 0 then
-                    redstone.setAnalogOutput(sides.kill, 1)
+                    zeroCount = zeroCount + 1
+                    if zeroCount >= 5 then  -- ~0.5 seconds of sustained zero
+                        redstone.setAnalogOutput(sides.kill, 1)
+                    end
+                else
+                    zeroCount = 0
                 end
             else
                 -- Stop Logic
