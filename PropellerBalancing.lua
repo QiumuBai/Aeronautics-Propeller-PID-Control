@@ -14,7 +14,7 @@ local pidRoll  = pid.createPid(0.15, 0.01, 1.2, 0.1, 0)
 
 -- Mapping propellers + Global Stop
 local sides = {
-    fl = "top",
+    fl = "front",
     fr = "right",
     bl = "left",
     br = "back",
