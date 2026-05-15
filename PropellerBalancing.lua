@@ -27,7 +27,7 @@ local sides = {
 }
 
 -- 2. UI & OPTIMIZATION
-local lastState = { cP = -999, cR = -999, fl = -1, fr = -1, bl = -1, br = -1, active = nil }
+local lastState = { cP = -999, cR = -999, fl = -1, fr = -1, bl = -1, br = -1, active = nil, kill = nil }
 
 local function drawStaticUI()
     term.clear()
@@ -37,6 +37,7 @@ local function drawStaticUI()
     print("+----------------------------------------+")
     print("| Pitch (X):             Roll (Z):       |")
     print("| Status   : [          ]                |")
+    print("| Kill Sig : [    ]                      |")  -- NEW
     print("+----------------------------------------+")
     print("| FL: [  ]           FR: [  ]            |")
     print("| BL: [  ]           BR: [  ]            |")
@@ -46,10 +47,9 @@ local function drawStaticUI()
     print("+----------------------------------------+")
 end
 
-local function smartUpdate(cP, cR, s)
+local function smartUpdate(cP, cR, s, killActive)
     if inputting then return end
 
-    -- Update Angles
     if math.abs(cP - lastState.cP) > 0.01 then
         term.setCursorPos(14, 4) term.write(string.format("%6.2f", cP))
         lastState.cP = cP
@@ -59,7 +59,6 @@ local function smartUpdate(cP, cR, s)
         lastState.cR = cR
     end
 
-    -- Update System Status
     if systemActive ~= lastState.active then
         term.setCursorPos(15, 5)
         if systemActive then
@@ -73,8 +72,21 @@ local function smartUpdate(cP, cR, s)
         lastState.active = systemActive
     end
 
-    -- Update Propeller RPM indicators
-    local pPos = {fl={8,7}, fr={27,7}, bl={8,8}, br={27,8}}
+    -- NEW: Kill signal indicator
+    if killActive ~= lastState.kill then
+        term.setCursorPos(15, 6)
+        if killActive then
+            term.setTextColor(colors.red)
+            term.write(" ON ")
+        else
+            term.setTextColor(colors.green)
+            term.write("OFF ")
+        end
+        term.setTextColor(colors.white)
+        lastState.kill = killActive
+    end
+
+    local pPos = {fl={8,8}, fr={27,8}, bl={8,9}, br={27,9}}  -- shifted +1
     for k, v in pairs(s) do
         if v ~= lastState[k] then
             term.setCursorPos(pPos[k][1], pPos[k][2])
@@ -84,8 +96,12 @@ local function smartUpdate(cP, cR, s)
     end
 end
 
+
 -- 3. CONTROL LOGIC
 local function controlLoop()
+    local zeroCount = 0     -- ✅ MOVE HERE: outside while, persists between cycles
+    local killActive = false -- ✅ ADD HERE: same reason
+
     while running do
         if not inputting then
             local s = { fl = 15, fr = 15, bl = 15, br = 15 }
@@ -93,7 +109,8 @@ local function controlLoop()
 
             if systemActive then
                 -- Normal Balancing Logic
-                redstone.setAnalogOutput(sides.kill, 0) -- Kill signal OFF
+                redstone.setAnalogOutput(sides.kill, 0)
+                killActive = false -- ✅ reset each active cycle
 
                 local angles = sensor.getAngles()
                 cP, cR = angles[1], angles[2]
@@ -101,29 +118,32 @@ local function controlLoop()
                 local dP = pidPitch:step(targetPitch - cP)
                 local dR = pidRoll:step(targetRoll - cR)
 
-               local function clamp(val)
-                   return math.max(0, math.min(14, math.floor(val + 0.5)))
-               end
+                local function clamp(val)
+                    return math.max(0, math.min(14, math.floor(val + 0.5)))
+                end
 
                 s.fl = clamp(dP + dR)
                 s.fr = clamp(dP - dR)
                 s.bl = clamp(-dP + dR)
                 s.br = clamp(-dP - dR)
 
-                -- IDLE STOP LOGIC: If all props calculate 0, send the Stop signal
-                local zeroCount = 0
+                -- IDLE STOP LOGIC
                 if s.fl == 0 and s.fr == 0 and s.bl == 0 and s.br == 0 then
                     zeroCount = zeroCount + 1
-                    if zeroCount >= 5 then  -- ~0.5 seconds of sustained zero
+                    if zeroCount >= 5 then
                         redstone.setAnalogOutput(sides.kill, 1)
+                        killActive = true -- ✅ mark kill as active
                     end
                 else
-                    zeroCount = 0
+                    zeroCount = 0 -- ✅ reset when props are non-zero
                 end
+
             else
                 -- Stop Logic
-                redstone.setAnalogOutput(sides.kill, 1) -- Kill signal ON
+                redstone.setAnalogOutput(sides.kill, 1)
+                killActive = true  -- ✅ mark kill as active
                 s = { fl = 0, fr = 0, bl = 0, br = 0 }
+                zeroCount = 0     -- ✅ reset so idle logic starts fresh on resume
             end
 
             -- Apply Output
@@ -132,7 +152,7 @@ local function controlLoop()
             redstone.setAnalogOutput(sides.bl, s.bl)
             redstone.setAnalogOutput(sides.br, s.br)
 
-            smartUpdate(cP, cR, s)
+            smartUpdate(cP, cR, s, killActive) -- ✅ pass killActive as 4th argument
         end
         sleep(0.1)
     end
