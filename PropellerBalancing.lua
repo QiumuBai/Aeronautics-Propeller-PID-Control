@@ -50,12 +50,12 @@ local function smartUpdate(cP, cR, s)
     if inputting then return end
 
     -- Update Angles
-    if math.abs(cP - lastState.cP) > 0.1 then
-        term.setCursorPos(14, 4) term.write(string.format("%5.1f", cP))
+    if math.abs(cP - lastState.cP) > 0.01 then
+        term.setCursorPos(14, 4) term.write(string.format("%6.2f", cP))
         lastState.cP = cP
     end
-    if math.abs(cR - lastState.cR) > 0.1 then
-        term.setCursorPos(35, 4) term.write(string.format("%5.1f", cR))
+    if math.abs(cR - lastState.cR) > 0.01 then
+        term.setCursorPos(34, 4) term.write(string.format("%6.2f", cR))
         lastState.cR = cR
     end
 
@@ -123,7 +123,7 @@ local function controlLoop()
             else
                 -- Stop Logic
                 redstone.setAnalogOutput(sides.kill, 1) -- Kill signal ON
-                -- All motors remain 15 (Stop)
+                s = { fl = 0, fr = 0, bl = 0, br = 0 }
             end
 
             -- Apply Output
