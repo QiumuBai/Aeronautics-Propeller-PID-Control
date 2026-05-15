@@ -12,9 +12,15 @@ local systemActive = true -- Master toggle
 local pidPitch = pid.createPid(0.15, 0.01, 1.2, 0.1, 0)
 local pidRoll  = pid.createPid(0.15, 0.01, 1.2, 0.1, 0)
 
+-- Sensor Placement Check
+local sensor = peripheral.find("gimbal_sensor")
+if not sensor then
+error("CRITICAL: Gimbal Sensor not found! Please check the physical connection.")
+end
+
 -- Mapping propellers + Global Stop
 local sides = {
-    fl = "top",
+    fl = "front",
     fr = "right",
     bl = "left",
     br = "back",
@@ -28,7 +34,7 @@ local function drawStaticUI()
     term.clear()
     term.setCursorPos(1, 1)
     print("+----------------------------------------+")
-    print("|      Reactionary Balancing System      |")
+    print("|            Balancing System            |")
     print("+----------------------------------------+")
     print("| Pitch (X):             Roll (Z):       |")
     print("| Status   : [          ]                |")
@@ -69,7 +75,7 @@ local function smartUpdate(cP, cR, s)
     end
 
     -- Update Propeller RPM indicators
-    local pPos = {fl={7,7}, fr={27,7}, bl={7,8}, br={27,8}}
+    local pPos = {fl={8,7}, fr={27,7}, bl={8,8}, br={27,8}}
     for k, v in pairs(s) do
         if v ~= lastState[k] then
             term.setCursorPos(pPos[k][1], pPos[k][2])
@@ -104,9 +110,14 @@ local function controlLoop()
                 s.fr = clamp(dP - dR)
                 s.bl = clamp(-dP + dR)
                 s.br = clamp(-dP - dR)
+
+                -- IDLE STOP LOGIC: If all props calculate 0, send the Stop signal
+                if s.fl == 0 and s.fr == 0 and s.bl == 0 and s.br == 0 then
+                    redstone.setAnalogOutput(sides.kill, 1)
+                end
             else
                 -- Stop Logic
-                redstone.setAnalogOutput(sides.kill, 15) -- Kill signal ON
+                redstone.setAnalogOutput(sides.kill, 1) -- Kill signal ON
                 -- All motors remain 15 (Stop)
             end
 
@@ -154,5 +165,5 @@ parallel.waitForAny(controlLoop, inputHandler)
 term.clear()
 term.setCursorPos(1,1)
 print("Shutting down... Sending STOP signal.")
-redstone.setAnalogOutput(sides.kill, 15)
+redstone.setAnalogOutput("bottom", 1)
 print("Safe for disassembly.")
