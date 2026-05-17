@@ -4,7 +4,7 @@
 rednet.open("back")  -- change to your modem side
 
 -- Motor computer rednet IDs -- change to match your setup
-local motorIds = { fl=10, fr=11, bl=12, br=13 }
+local motorIds = { fl=3, fr=5, bl=2, br=4 }
 
 local sensor = peripheral.find("gimbal_sensor")
 if not sensor then error("CRITICAL: Gimbal Sensor not found!") end
@@ -21,7 +21,7 @@ local kp     = 80
 local ki     = 20
 local kd     = 40
 local intMax = 2     -- integral clamp (same as template)
-local maxSpeed = 200 -- RPM ceiling
+local maxSpeed = 256 -- RPM ceiling
 local maxStep  = 15  -- max RPM change per cycle (rate limiter)
 
 -- 3. PID STATE
