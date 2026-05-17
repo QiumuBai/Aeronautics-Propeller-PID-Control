@@ -1,33 +1,45 @@
-local tothesky = require('tothesky')
-local pid = tothesky.pid
+-- Central Controller: reads sensor, runs PID, sends speeds via rednet
 
--- 1. CONFIGURATION
-local targetPitch, targetRoll = 0.0, 0.0
-local running = true
-local inputting = false
-local systemActive = true -- Master toggle
+-- 1. NETWORK & PERIPHERALS
+rednet.open("back")  -- change to your modem side
 
--- PID Tuning (Baseline 'u' is 0 for reactionary balancing)
-local pidPitch = pid.createPid(0.35, 0.008, 1.5, 0.1, 0)
-local pidRoll  = pid.createPid(0.35, 0.008, 1.5, 0.1, 0)
+-- Motor computer rednet IDs -- change to match your setup
+local motorIds = { fl=10, fr=11, bl=12, br=13 }
 
--- Sensor Placement Check
 local sensor = peripheral.find("gimbal_sensor")
-if not sensor then
-error("CRITICAL: Gimbal Sensor not found! Please check the physical connection.")
+if not sensor then error("CRITICAL: Gimbal Sensor not found!") end
+
+-- 2. CONFIGURATION
+local targetPitch, targetRoll = 0.0, 0.0
+local running      = true
+local inputting    = false
+local systemActive = true
+
+-- PID gains (template-style standard form)
+-- Integral winds up naturally to provide steady-state correction (hover)
+local kp     = 80
+local ki     = 20
+local kd     = 40
+local intMax = 2     -- integral clamp (same as template)
+local maxSpeed = 200 -- RPM ceiling
+local maxStep  = 15  -- max RPM change per cycle (rate limiter)
+
+-- 3. PID STATE
+local intP, intR           = 0, 0
+local lastP, lastR         = nil, nil
+local lastTime             = nil
+local lastSpeeds           = { fl=0, fr=0, bl=0, br=0 }
+
+local function clamp(x, lo, hi)
+    return math.max(lo, math.min(hi, x))
 end
 
--- Mapping propellers + Global Stop
-local sides = {
-    fl = "front",
-    fr = "right",
-    bl = "left",
-    br = "back",
-    kill = "bottom" -- The Master Stop Output
+-- 4. UI
+local lastState = {
+    cP=-999, cR=-999,
+    fl=-999, fr=-999, bl=-999, br=-999,
+    active=nil, kill=nil
 }
-
--- 2. UI & OPTIMIZATION
-local lastState = { cP = -999, cR = -999, fl = -1, fr = -1, bl = -1, br = -1, active = nil, kill = nil }
 
 local function drawStaticUI()
     term.clear()
@@ -37,10 +49,10 @@ local function drawStaticUI()
     print("+----------------------------------------+")
     print("| Pitch (X):             Roll (Z):       |")
     print("| Status   : [          ]                |")
-    print("| Kill Sig : [    ]                      |")  -- NEW
+    print("| Kill Sig : [    ]                      |")
     print("+----------------------------------------+")
-    print("| FL: [  ]           FR: [  ]            |")
-    print("| BL: [  ]           BR: [  ]            |")
+    print("| FL: [    ]         FR: [    ]          |")
+    print("| BL: [    ]         BR: [    ]          |")
     print("+----------------------------------------+")
     print("| [C] Set Target   [S] Toggle System/Stop|")
     print("| [E] Exit Program                       |")
@@ -62,120 +74,135 @@ local function smartUpdate(cP, cR, s, killActive)
     if systemActive ~= lastState.active then
         term.setCursorPos(15, 5)
         if systemActive then
-            term.setTextColor(colors.green)
-            term.write(" ACTIVE   ")
+            term.setTextColor(colors.green) term.write(" ACTIVE   ")
         else
-            term.setTextColor(colors.red)
-            term.write(" STOPPED  ")
+            term.setTextColor(colors.red)   term.write(" STOPPED  ")
         end
         term.setTextColor(colors.white)
         lastState.active = systemActive
     end
 
-    -- NEW: Kill signal indicator
     if killActive ~= lastState.kill then
         term.setCursorPos(15, 6)
         if killActive then
-            term.setTextColor(colors.red)
-            term.write(" ON ")
+            term.setTextColor(colors.red)   term.write(" ON ")
         else
-            term.setTextColor(colors.green)
-            term.write("OFF ")
+            term.setTextColor(colors.green) term.write("OFF ")
         end
         term.setTextColor(colors.white)
         lastState.kill = killActive
     end
 
-    local pPos = {fl={8,8}, fr={27,8}, bl={8,9}, br={27,9}}  -- shifted +1
+    local pPos = { fl={8,8}, fr={27,8}, bl={8,9}, br={27,9} }
     for k, v in pairs(s) do
         if v ~= lastState[k] then
             term.setCursorPos(pPos[k][1], pPos[k][2])
-            term.write(string.format("%2d", v))
+            term.write(string.format("%4d", v))
             lastState[k] = v
         end
     end
 end
 
-
--- 3. CONTROL LOGIC
+-- 5. CONTROL LOOP
 local function controlLoop()
-    local zeroCount = 0     -- ✅ MOVE HERE: outside while, persists between cycles
-    local killActive = false -- ✅ ADD HERE: same reason
+    local killActive = false
+    local zeroCount  = 0
 
     while running do
         if not inputting then
-            local s = { fl = 15, fr = 15, bl = 15, br = 15 }
+            local s = { fl=0, fr=0, bl=0, br=0 }
             local cP, cR = 0, 0
 
             if systemActive then
-                -- Normal Balancing Logic
-                redstone.setAnalogOutput(sides.kill, 0)
-                killActive = false -- ✅ reset each active cycle
+                killActive = false
 
+                local now    = os.clock()
                 local angles = sensor.getAngles()
                 cP, cR = angles[1], angles[2]
 
-                local dP = pidPitch:step(targetPitch - cP)
-                local dR = pidRoll:step(targetRoll - cR)
+                local errP = targetPitch - cP
+                local errR = targetRoll  - cR
 
-                local function clamp(val)
-                    return math.max(0, math.min(14, math.floor(val + 0.5)))
+                -- Compute angular velocity and accumulate integral
+                local omegaP, omegaR = 0, 0
+                if lastTime then
+                    local dt = math.max(now - lastTime, 0.001)
+                    omegaP = (cP - lastP) / dt
+                    omegaR = (cR - lastR) / dt
+                    -- Integral winds up to provide steady-state correction naturally
+                    intP = clamp(intP + errP * dt, -intMax, intMax)
+                    intR = clamp(intR + errR * dt, -intMax, intMax)
+                end
+                lastP, lastR, lastTime = cP, cR, now
+
+                local dP = clamp(kp*errP + ki*intP - kd*omegaP, -maxSpeed, maxSpeed)
+                local dR = clamp(kp*errR + ki*intR - kd*omegaR, -maxSpeed, maxSpeed)
+
+                -- Mixing:
+                -- Pitch: same sign for all four (front lifts, rear pushes down = same nose-up torque)
+                -- Roll:  diagonal pairs (FL&BR vs FR&BL)
+                local raw = {
+                    fl =  dP + dR,  -- } diagonal A
+                    br =  dP + dR,  -- }
+                    fr =  dP - dR,  -- } diagonal B
+                    bl =  dP - dR,  -- }
+                }
+
+                -- Rate limiter: prevents sudden RPM jumps
+                for k, v in pairs(raw) do
+                    local step = clamp(v - lastSpeeds[k], -maxStep, maxStep)
+                    s[k] = math.floor(clamp(lastSpeeds[k] + step, -maxSpeed, maxSpeed))
                 end
 
-                s.fl = clamp(dP + dR)
-                s.fr = clamp(dP - dR)
-                s.bl = clamp(-dP + dR)
-                s.br = clamp(-dP - dR)
-
-                -- IDLE STOP LOGIC
-                if s.fl == 0 and s.fr == 0 and s.bl == 0 and s.br == 0 then
+                if s.fl==0 and s.fr==0 and s.bl==0 and s.br==0 then
                     zeroCount = zeroCount + 1
-                    if zeroCount >= 5 then
-                        redstone.setAnalogOutput(sides.kill, 1)
-                        killActive = true -- ✅ mark kill as active
-                    end
+                    if zeroCount >= 5 then killActive = true end
                 else
-                    zeroCount = 0 -- ✅ reset when props are non-zero
+                    zeroCount = 0
                 end
 
             else
-                -- Stop Logic
-                redstone.setAnalogOutput(sides.kill, 1)
-                killActive = true  -- ✅ mark kill as active
-                s = { fl = 0, fr = 0, bl = 0, br = 0 }
-                zeroCount = 0     -- ✅ reset so idle logic starts fresh on resume
+                -- Stopped: clear PID state so integral doesn't carry over on resume
+                killActive = true
+                zeroCount  = 0
+                intP, intR = 0, 0
+                lastP, lastR, lastTime = nil, nil, nil
             end
 
-            -- Apply Output
-            redstone.setAnalogOutput(sides.fl, s.fl)
-            redstone.setAnalogOutput(sides.fr, s.fr)
-            redstone.setAnalogOutput(sides.bl, s.bl)
-            redstone.setAnalogOutput(sides.br, s.br)
+            -- Send speed to each motor computer
+            for k, id in pairs(motorIds) do
+                rednet.send(id, killActive and 0 or s[k])
+            end
+            lastSpeeds = { fl=s.fl, fr=s.fr, bl=s.bl, br=s.br }
 
-            smartUpdate(cP, cR, s, killActive) -- ✅ pass killActive as 4th argument
+            smartUpdate(cP, cR, s, killActive)
         end
-        sleep(0.1)
+        sleep(0.05)  -- 20Hz, matches template
     end
 end
 
--- 4. INPUT HANDLING
+-- 6. INPUT HANDLER
 local function inputHandler()
     while running do
         local _, key = os.pullEvent("key")
         if key == keys.c then
             inputting = true
-            term.setCursorPos(1, 13) term.clearLine()
+            term.setCursorPos(1, 14) term.clearLine()
             term.write("Set Pitch (X): ")
             local p = tonumber(read())
-            term.setCursorPos(1, 13) term.clearLine()
+            term.setCursorPos(1, 14) term.clearLine()
             term.write("Set Roll (Z): ")
             local r = tonumber(read())
             if p then targetPitch = p end
-            if r then targetRoll = r end
+            if r then targetRoll  = r end
             inputting = false
             drawStaticUI()
         elseif key == keys.s then
             systemActive = not systemActive
+            if not systemActive then
+                intP, intR = 0, 0
+                lastP, lastR, lastTime = nil, nil, nil
+            end
         elseif key == keys.e then
             running = false
         end
@@ -186,9 +213,9 @@ end
 drawStaticUI()
 parallel.waitForAny(controlLoop, inputHandler)
 
--- FINAL CLEANUP
+-- CLEANUP
 term.clear()
 term.setCursorPos(1,1)
-print("Shutting down... Sending STOP signal.")
-redstone.setAnalogOutput("bottom", 1)
+print("Shutting down... Sending stop to all motors.")
+for k, id in pairs(motorIds) do rednet.send(id, 0) end
 print("Safe for disassembly.")
