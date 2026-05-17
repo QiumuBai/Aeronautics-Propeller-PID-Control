@@ -20,6 +20,7 @@ local systemActive = true
 local kp     = 80
 local ki     = 20
 local kd     = 40
+local nlPower = 1.5  -- 1=linear, 2=quadratic, 1.5 is a good starting point
 local intMax = 2     -- integral clamp (same as template)
 local maxSpeed = 256 -- RPM ceiling
 local maxStep  = 15  -- max RPM change per cycle (rate limiter)
@@ -32,6 +33,12 @@ local lastSpeeds           = { fl=0, fr=0, bl=0, br=0 }
 
 local function clamp(x, lo, hi)
     return math.max(lo, math.min(hi, x))
+end
+
+local function nlErr(err)
+    -- Scales small errors down and large errors up
+    -- Crossover point (equal to linear) is always at exactly 1 degree
+    return math.abs(err)^nlPower * (err >= 0 and 1 or -1)
 end
 
 -- 4. UI
@@ -135,8 +142,8 @@ local function controlLoop()
                 end
                 lastP, lastR, lastTime = cP, cR, now
 
-                local dP = clamp(kp*errP + ki*intP - kd*omegaP, -maxSpeed, maxSpeed)
-                local dR = clamp(kp*errR + ki*intR - kd*omegaR, -maxSpeed, maxSpeed)
+                local dP = clamp(kp*nlErr(errP) + ki*intP - kd*omegaP, -maxSpeed, maxSpeed)
+                local dR = clamp(kp*nlErr(errR) + ki*intR - kd*omegaR, -maxSpeed, maxSpeed)
 
                 -- Mixing:
                 -- Pitch: same sign for all four (front lifts, rear pushes down = same nose-up torque)
