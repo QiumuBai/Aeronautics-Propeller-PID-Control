@@ -17,19 +17,22 @@ local systemActive = true
 
 -- PID gains (template-style standard form)
 -- Integral winds up naturally to provide steady-state correction (hover)
-local kp     = 80
-local ki     = 20
-local kd     = 40
-local nlPower = 1.5  -- 1=linear, 2=quadratic, 1.5 is a good starting point
-local intMax = 2     -- integral clamp (same as template)
-local maxSpeed = 256 -- RPM ceiling
-local maxStep  = 15  -- max RPM change per cycle (rate limiter)
+local kp      = 45
+local ki      = 8       -- lower: integral adding to overshoot
+local kd      = 120     -- MUCH higher: this is what kills the oscillation
+local nlPower = 1.2     -- slight nonlinearity is fine
+local intMax  = 1.0     -- tighter integral clamp
+local maxSpeed = 150    -- lower ceiling: less violent swings
+local maxStep  = 6      -- slower rate limiter: smoother transitions
+local startupRamp = 4.0
 
 -- 3. PID STATE
 local intP, intR           = 0, 0
 local lastP, lastR         = nil, nil
 local lastTime             = nil
 local lastSpeeds           = { fl=0, fr=0, bl=0, br=0 }
+local activatedAt = nil
+local wasActive   = false
 
 local function clamp(x, lo, hi)
     return math.max(lo, math.min(hi, x))
@@ -155,17 +158,19 @@ local function controlLoop()
                     bl =  dP - dR,  -- }
                 }
 
-                -- Rate limiter: prevents sudden RPM jumps
-                for k, v in pairs(raw) do
-                    local step = clamp(v - lastSpeeds[k], -maxStep, maxStep)
-                    s[k] = math.floor(clamp(lastSpeeds[k] + step, -maxSpeed, maxSpeed))
+                -- Detect activation transition and start the ramp timer
+                if systemActive and not wasActive then
+                    activatedAt = os.clock()
                 end
+                wasActive = systemActive
 
-                if s.fl==0 and s.fr==0 and s.bl==0 and s.br==0 then
-                    zeroCount = zeroCount + 1
-                    if zeroCount >= 5 then killActive = true end
-                else
-                    zeroCount = 0
+                -- Ramp: 0 at activation, reaches 1.0 after startupRamp seconds
+                local ramp = math.min((os.clock() - activatedAt) / startupRamp, 1.0)
+
+                -- Rate limiter applied to ramped target
+                for k, v in pairs(raw) do
+                    local step = clamp(v * ramp - lastSpeeds[k], -maxStep, maxStep)
+                    s[k] = math.floor(clamp(lastSpeeds[k] + step, -maxSpeed, maxSpeed))
                 end
 
             else
