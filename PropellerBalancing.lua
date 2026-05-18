@@ -152,10 +152,10 @@ local function controlLoop()
                 -- Pitch: same sign for all four (front lifts, rear pushes down = same nose-up torque)
                 -- Roll:  diagonal pairs (FL&BR vs FR&BL)
                 local raw = {
-                    fl =  dP + dR,  -- } diagonal A
-                    br =  dP + dR,  -- }
-                    fr =  dP - dR,  -- } diagonal B
-                    bl =  dP - dR,  -- }
+                    fl =  dP - dR,
+                    br =  dP - dR,
+                    fr =  dP + dR,
+                    bl =  dP + dR,
                 }
 
                 -- Detect activation transition and start the ramp timer
