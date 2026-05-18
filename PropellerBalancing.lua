@@ -17,11 +17,15 @@ local systemActive = true
 
 -- PID gains (template-style standard form)
 -- Integral winds up naturally to provide steady-state correction (hover)
-local kp      = 45
-local ki      = 8       -- lower: integral adding to overshoot
-local kd      = 120     -- MUCH higher: this is what kills the oscillation
+local kpP    = 45
+local kiP    = 15
+local kdP    = 120
+local kpR    = 40
+local kiR    = 8
+local kdR    = 180
 local nlPower = 1.2     -- slight nonlinearity is fine
-local intMax  = 1.0     -- tighter integral clamp
+local intMaxP = 4
+local intMaxR = 2
 local maxSpeed = 150    -- lower ceiling: less violent swings
 local maxStep  = 6      -- slower rate limiter: smoother transitions
 local startupRamp = 4.0
@@ -140,13 +144,13 @@ local function controlLoop()
                     omegaP = (cP - lastP) / dt
                     omegaR = (cR - lastR) / dt
                     -- Integral winds up to provide steady-state correction naturally
-                    intP = clamp(intP + errP * dt, -intMax, intMax)
-                    intR = clamp(intR + errR * dt, -intMax, intMax)
+                    intP = clamp(intP + errP * dt, -intMaxP, intMaxP)
+                    intR = clamp(intR + errR * dt, -intMaxR, intMaxR)
                 end
                 lastP, lastR, lastTime = cP, cR, now
 
-                local dP = clamp(kp*nlErr(errP) + ki*intP - kd*omegaP, -maxSpeed, maxSpeed)
-                local dR = clamp(kp*nlErr(errR) + ki*intR - kd*omegaR, -maxSpeed, maxSpeed)
+                local dP = clamp(kpP*nlErr(errP) + kiP*intP - kdP*omegaP, -maxSpeed, maxSpeed)
+                local dR = clamp(kpR*nlErr(errR) + kiR*intR - kdR*omegaR, -maxSpeed, maxSpeed)
 
                 -- Mixing:
                 -- Pitch: same sign for all four (front lifts, rear pushes down = same nose-up torque)
